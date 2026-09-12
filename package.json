@@ -1,0 +1,21 @@
+{
+  "name": "coding-agent",
+  "version": "0.1.0",
+  "description": "Minimal coding agent (bash/read/write/edit) built with Node.js + OpenTUI",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node --experimental-ffi --env-file=.env src/index.js",
+    "chat": "node --experimental-ffi --env-file=.env src/cli.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=26.4.0"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.5.11"
+  }
+}
