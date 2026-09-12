@@ -1,8 +1,6 @@
 import { streamChatCompletion } from "./llm.js";
 import { toolSchemas, toolsByName } from "./tools/index.js";
 
-const MAX_STEPS = 25;
-
 export const SYSTEM_PROMPT = `You are a coding agent running in the user's terminal at ${process.cwd()}.
 
 You have four tools:
@@ -28,7 +26,7 @@ export function createAgent({ handlers = {} } = {}) {
   async function send(userText) {
     messages.push({ role: "user", content: userText });
 
-    for (let step = 0; step < MAX_STEPS; step++) {
+    for (;;) {
       const message = await streamChatCompletion({
         messages,
         tools: toolSchemas,
@@ -50,8 +48,6 @@ export function createAgent({ handlers = {} } = {}) {
         messages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
       }
     }
-
-    throw new Error(`Stopped after ${MAX_STEPS} steps without a final answer.`);
   }
 
   return { messages, send };

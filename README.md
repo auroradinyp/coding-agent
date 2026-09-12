@@ -65,7 +65,7 @@ TUI 里输入请求回车即可，`ctrl+c` 退出。
    `tool_calls` 按 `index` 拼接分片（`id` / `name` / `arguments` 都是增量的）。
 3. 有 `tool_calls` 就逐个执行，把结果以 `{ role: "tool", tool_call_id, content }` 追加进 history，
    回到第 1 步；工具抛错不中断，而是把 `Error: ...` 作为结果回给模型。
-4. 没有 `tool_calls` 即本轮结束。最多 25 步，防止死循环。
+4. 没有 `tool_calls` 即本轮结束；否则无限循环下去，直到模型给出最终回答。
 
 ## 已知限制（初版有意留的）
 
