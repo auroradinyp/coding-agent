@@ -15,7 +15,7 @@ src/
     bash.js       command, timeout
     read.js       path, startLine, endLine
     write.js      path, content
-    edit.js       path, startLine, endLine, content
+    edit.js       path, oldText, newText
     index.js      工具注册表 + OpenAI tool schema
 ```
 
@@ -56,7 +56,7 @@ TUI 里输入请求回车即可，`ctrl+c` 退出。
 | `bash` | `command`, `timeout`(ms，默认 120000，上限 600000) | `bash -lc`，返回 stdout / stderr / exit code；超时杀整个进程组，输出超 30KB 截断 |
 | `read` | `path`, `startLine?`, `endLine?` | 1-indexed，两端 inclusive；输出带行号前缀；单次最多 2000 行 |
 | `write` | `path`, `content` | 全量覆盖，自动创建父目录；内容原样写入（不做换行归一化） |
-| `edit` | `path`, `startLine`, `endLine`, `content` | 用 `content` 替换 `[startLine, endLine]`（inclusive）；`content` 为空串即删除该区间；越界报错 |
+| `edit` | `path`, `oldText`, `newText` | 用 `newText` 替换文件里**唯一一处** `oldText`；`newText` 为空串即删除该段。精确匹配（含缩进、空行），命中 0 处或多处都报错且不改动文件。文件是 CRLF 时，模型直接复制 `read` 输出的 LF 文本也能匹配，写回仍用原换行符 |
 
 ## Agent Loop
 
@@ -69,7 +69,8 @@ TUI 里输入请求回车即可，`ctrl+c` 退出。
 
 ## 已知限制（初版有意留的）
 
-- `edit` 用行号定位，需要模型先 `read`；行号会因文件变动失效（后续可换成 oldText/newText 精确匹配）。
+- `edit` 要求 `oldText` 唯一匹配，没有 `replaceAll`：同一片段要改多处得多次调用，每次带上更长的上下文。
+- `edit` 不记录文件是否在 `read` 之后被改过，也没有 diff 预览；混合换行（CRLF 和 LF 混在一个文件里）会被统一成多数的那种。
 - 没有 glob/grep，找文件只能靠 `bash`。
 - 没有中断（busy 时不能取消）、没有历史长度控制、没有持久化。
 - 输出只在 TUI 显示，没有日志落盘。

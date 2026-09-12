@@ -1,58 +1,85 @@
 import fs from "node:fs/promises";
-import { displayPath, readLines, resolveToolPath } from "./util.js";
+import { displayPath, readText, resolveToolPath, splitLines } from "./util.js";
 
 export const editTool = {
   name: "edit",
   description:
-    "Replace an inclusive range of 1-indexed lines [startLine, endLine] in a file with `content`. " +
-    "Line numbers refer to the numbers printed by the read tool, so read the file first. " +
-    "Use an empty `content` string to delete the range.",
+    "Replace a unique block of text in a file: `newText` takes the place of `oldText`. " +
+    "`oldText` must match the file exactly (indentation and blank lines included) and must occur " +
+    "only once; extend it with surrounding lines until it is unique. " +
+    "An empty `newText` deletes the block. Read the file first.",
   parameters: {
     type: "object",
     properties: {
       path: { type: "string", description: "File path (absolute, or relative to the working directory)." },
-      startLine: { type: "integer", description: "First line to replace (1-indexed, inclusive)." },
-      endLine: { type: "integer", description: "Last line to replace (1-indexed, inclusive)." },
-      content: { type: "string", description: "Replacement text. May contain multiple lines." },
+      oldText: {
+        type: "string",
+        description:
+          "Exact text to replace, copied from the file. Indentation and blank lines must match. " +
+          "Must occur exactly once in the file.",
+      },
+      newText: {
+        type: "string",
+        description: "Replacement text. May contain multiple lines. An empty string deletes `oldText`.",
+      },
     },
-    required: ["path", "startLine", "endLine", "content"],
+    required: ["path", "oldText", "newText"],
   },
 
   async run(args = {}) {
     const filePath = resolveToolPath(args.path);
-    if (typeof args.content !== "string") throw new Error("content must be a string");
+    if (typeof args.oldText !== "string" || args.oldText === "") {
+      throw new Error("oldText must be a non-empty string");
+    }
+    if (typeof args.newText !== "string") throw new Error("newText must be a string");
 
-    const lines = await readLines(fs, filePath);
-    const total = lines.length;
+    const raw = await readText(fs, filePath);
 
-    const startLine = requireLine(args.startLine, "startLine");
-    const endLine = requireLine(args.endLine, "endLine");
+    // Match against LF-normalized text so files with CRLF endings still work when the model copies
+    // text from the read tool; the file's own line ending is restored on write.
+    const crlf = raw.includes("\r\n");
+    const body = toLf(raw);
+    const oldBlock = toLf(args.oldText);
+    const newBlock = toLf(args.newText);
 
-    if (startLine > endLine) throw new Error(`startLine (${startLine}) > endLine (${endLine})`);
-    if (endLine > total) {
+    const at = body.indexOf(oldBlock);
+    if (at === -1) {
       throw new Error(
-        `endLine (${endLine}) is past the end of ${displayPath(filePath)} (${total} lines). Read the file again.`,
+        `oldText not found in ${displayPath(filePath)} (${plural(splitLines(body).length, "line")}). ` +
+          "Read the file again and copy the text exactly, indentation and blank lines included.",
       );
     }
 
-    const replacement = args.content === "" ? [] : args.content.split("\n");
-    const next = [
-      ...lines.slice(0, startLine - 1),
-      ...replacement,
-      ...lines.slice(endLine),
-    ];
+    const occurrences = countOccurrences(body, oldBlock);
+    if (occurrences > 1) {
+      throw new Error(
+        `oldText occurs ${occurrences} times in ${displayPath(filePath)}. ` +
+          "Extend it with more surrounding lines so that it matches exactly once.",
+      );
+    }
 
-    await fs.writeFile(filePath, next.length ? `${next.join("\n")}\n` : "", "utf8");
+    const updated = body.slice(0, at) + newBlock + body.slice(at + oldBlock.length);
+    await fs.writeFile(filePath, crlf ? updated.replaceAll("\n", "\r\n") : updated, "utf8");
 
     return (
-      `Edited ${displayPath(filePath)}: replaced lines ${startLine}-${endLine} ` +
-      `with ${replacement.length} line(s). File now has ${next.length} lines.`
+      `Edited ${displayPath(filePath)}: replaced ${splitLines(oldBlock).length} line(s) with ` +
+      `${splitLines(newBlock).length} line(s). File now has ${splitLines(updated).length} lines.`
     );
   },
 };
 
-function requireLine(value, name) {
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 1) throw new Error(`${name} must be a positive integer`);
-  return n;
+function toLf(text) {
+  return text.replaceAll("\r\n", "\n");
+}
+
+function plural(count, word) {
+  return `${count} ${count === 1 ? word : `${word}s`}`;
+}
+
+function countOccurrences(haystack, needle) {
+  let count = 0;
+  for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + needle.length)) {
+    count++;
+  }
+  return count;
 }
