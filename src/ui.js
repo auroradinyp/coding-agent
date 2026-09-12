@@ -1,11 +1,16 @@
 import {
   BoxRenderable,
   ScrollBoxRenderable,
+  SelectRenderable,
+  SelectRenderableEvents,
   TextRenderable,
   TextareaRenderable,
   createCliRenderer,
 } from "@opentui/core";
+import process from "node:process";
 import { createAgent } from "./agent.js";
+import { config } from "./config.js";
+import { HISTORY_DIR, createSessionStore, findSession } from "./session.js";
 
 const COLORS = {
   text: "#c0caf5",
@@ -21,21 +26,23 @@ const COLORS = {
 const INPUT_HEIGHT = 5;
 /** Max characters of tool output kept in a block body. */
 const TOOL_OUTPUT_LIMIT = 1500;
+/** Max sessions visible at once in the /resume picker. */
+const PICKER_VISIBLE = 8;
 
-export async function startTui() {
+export async function startTui(options = {}) {
   const renderer = await createCliRenderer({
     exitOnCtrlC: true,
     targetFps: 30,
     useMouse: true,
   });
 
-  const app = createApp(renderer);
+  const app = createApp(renderer, options);
   app.input.focus();
   renderer.requestRender();
 }
 
 /** Builds the whole UI on a renderer. Split out so tests can drive it headlessly. */
-export function createApp(renderer) {
+export function createApp(renderer, { historyDir = HISTORY_DIR } = {}) {
   const root = new BoxRenderable(renderer, {
     id: "root",
     width: "100%",
@@ -48,7 +55,7 @@ export function createApp(renderer) {
 
   const title = new TextRenderable(renderer, {
     id: "title",
-    content: "coding-agent  ·  deepseek-flash",
+    content: `coding-agent  ·  ${config.model}`,
     fg: COLORS.accent,
   });
 
@@ -107,7 +114,11 @@ export function createApp(renderer) {
     onSubmit: () => {
       const value = input.plainText.trim();
       input.setText("");
-      if (!value || busy) return;
+      if (!value || busy || picker) return;
+      if (value.startsWith("/")) {
+        runCommand(value);
+        return;
+      }
       void submit(value);
     },
   });
@@ -242,6 +253,21 @@ export function createApp(renderer) {
   let busy = false;
   let stream = null;
 
+  // ── sessions ────────────────────────────────────────────────────────────────
+  // Every history change is written back to ~/.coding-agent/historys (debounced);
+  // /new and /resume switch the session the agent appends to.
+  const store = createSessionStore({
+    dir: historyDir,
+    onError: (err) => addBlock(`could not save session: ${err.message}`, COLORS.error),
+  });
+
+  const setTitle = () => {
+    title.content = `coding-agent  ·  ${config.model}  ·  session ${agent.session.id}`;
+    renderer.requestRender();
+  };
+
+  let picker = null;
+
   const handlers = {
     onReasoningDelta(delta) {
       reasoning ??= addReasoningBlock();
@@ -269,9 +295,208 @@ export function createApp(renderer) {
       reasoning = null;
       toolBlocks.clear();
     },
+    onSessionChange(session) {
+      store.schedule(session);
+    },
   };
 
-  const agent = createAgent({ handlers });
+  const agent = createAgent({ handlers, session: store.create() });
+
+  // ── session commands ────────────────────────────────────────────────────────
+
+  const clearTranscript = () => {
+    for (const child of [...transcript.getChildren()]) transcript.remove(child);
+    scrollToBottom();
+  };
+
+  /** Replays a stored conversation into the transcript (reasoning is not persisted). */
+  const renderHistory = (session) => {
+    const blocks = new Map();
+    for (const message of session.messages) {
+      if (message.role === "user") {
+        addBlock(`› ${message.content}`, COLORS.user);
+      } else if (message.role === "assistant") {
+        if (message.content) addBlock(message.content, COLORS.text);
+        for (const toolCall of message.tool_calls ?? []) {
+          blocks.set(toolCall.id, addToolBlock(toolCall));
+        }
+      } else if (message.role === "tool") {
+        const block = blocks.get(message.tool_call_id);
+        if (!block) continue;
+        block.text = indent(truncate(message.content ?? "", TOOL_OUTPUT_LIMIT));
+        block.summary = summarize(message.content ?? "");
+        block.renderHeader(block);
+      }
+    }
+    scrollToBottom();
+  };
+
+  const startSession = (session, banner) => {
+    agent.use(session);
+    clearTranscript();
+    addBlock(banner, COLORS.accent);
+    setTitle();
+  };
+
+  const newSession = () => {
+    store.flush();
+    const session = store.create();
+    startSession(session, `── new session  ·  ${session.id} ──`);
+    setStatus("ready");
+  };
+
+  const resumeSession = (id) => {
+    store.flush();
+    const session = store.load(id);
+    startSession(
+      session,
+      `── resumed  ·  ${session.id}  ·  ${session.messages.length} messages restored ──`,
+    );
+    if (session.cwd && session.cwd !== process.cwd()) {
+      addBlock(`note: that session ran in ${session.cwd} (now ${process.cwd()})`, COLORS.dim);
+    }
+    renderHistory(session);
+    setStatus("ready");
+  };
+
+  const closePicker = () => {
+    if (!picker) return;
+    picker.select.blur();
+    root.remove(picker.box);
+    picker = null;
+    input.focus();
+    renderer.requestRender();
+  };
+
+  function openPicker() {
+    const sessions = store.list();
+    if (!sessions.length) {
+      addBlock(`no saved sessions yet — they land in ${store.dir}`, COLORS.dim);
+      return;
+    }
+
+    const visible = Math.min(sessions.length, PICKER_VISIBLE);
+    const box = new BoxRenderable(renderer, {
+      id: "resume-picker",
+      position: "absolute",
+      top: 2,
+      left: "8%",
+      width: "84%",
+      height: visible * 2 + 2,
+      zIndex: 10,
+      border: true,
+      borderStyle: "rounded",
+      borderColor: COLORS.accent,
+      title: " resume a session  (↑↓ move · enter resume · esc cancel) ",
+      titleAlignment: "center",
+      titleColor: COLORS.accent,
+      paddingLeft: 1,
+      paddingRight: 1,
+      backgroundColor: "#1a1b26",
+    });
+
+    const select = new SelectRenderable(renderer, {
+      id: "resume-select",
+      width: "100%",
+      height: visible * 2,
+      options: sessions.map((session) => ({
+        name: clip(session.title, 56),
+        description: `${formatAge(session.updatedAt)} · ${session.messageCount} messages · ${session.id}`,
+        value: session.id,
+      })),
+      showScrollIndicator: sessions.length > visible,
+      wrapSelection: true,
+      backgroundColor: "#1a1b26",
+      focusedBackgroundColor: "#1a1b26",
+      textColor: COLORS.text,
+      focusedTextColor: COLORS.text,
+      selectedBackgroundColor: COLORS.accent,
+      selectedTextColor: "#1a1b26",
+      descriptionColor: COLORS.dim,
+      selectedDescriptionColor: "#1a1b26",
+    });
+
+    select.on(SelectRenderableEvents.ITEM_SELECTED, (_index, option) => {
+      closePicker();
+      try {
+        resumeSession(option.value);
+      } catch (err) {
+        addBlock(`could not resume ${option.value}: ${err.message}`, COLORS.error);
+        setStatus("error", COLORS.error);
+      }
+    });
+
+    box.add(select);
+    root.add(box);
+    picker = { box, select };
+    input.blur();
+    select.focus();
+    renderer.requestRender();
+  }
+
+  /** `/resume` with no argument opens the picker; `/resume <id>` jumps straight in. */
+  function resume(idOrPrefix) {
+    if (!idOrPrefix) return openPicker();
+
+    const match = findSession(idOrPrefix, store.dir);
+    if (!match) {
+      addBlock(`no session matches "${idOrPrefix}"`, COLORS.error);
+      return;
+    }
+
+    try {
+      resumeSession(match.id);
+    } catch (err) {
+      addBlock(`could not resume ${match.id}: ${err.message}`, COLORS.error);
+      setStatus("error", COLORS.error);
+    }
+  }
+
+  const HELP = [
+    "commands:",
+    "  /new            start a fresh session (the current one stays on disk)",
+    "  /resume [id]    pick a stored session (↑↓ + enter) and keep chatting",
+    "  /help           this list",
+    "  /exit           quit   ·   ctrl+c also quits",
+    `sessions live in ${store.dir}`,
+  ].join("\n");
+
+  const runCommand = (line) => {
+    const [name = "", ...rest] = line.trim().slice(1).split(/\s+/);
+    switch (name.toLowerCase()) {
+      case "new":
+        newSession();
+        break;
+      case "resume":
+        resume(rest[0]);
+        break;
+      case "help":
+        addBlock(HELP, COLORS.dim);
+        break;
+      case "exit":
+      case "quit":
+        shutdown();
+        break;
+      default:
+        addBlock(`unknown command "${line}" — try /help`, COLORS.error);
+    }
+  };
+
+  function shutdown() {
+    store.flush();
+    renderer.destroy();
+  }
+
+  // Esc closes the picker; the key must not reach the select underneath.
+  renderer.keyInput.on("keypress", (key) => {
+    if (key.name !== "escape" || !picker) return;
+    key.preventDefault();
+    key.stopPropagation();
+    closePicker();
+  });
+
+  // Fallback for ctrl+c and anything else that ends the process.
+  process.on("exit", () => store.flush());
 
   async function submit(value) {
     busy = true;
@@ -294,12 +519,38 @@ export function createApp(renderer) {
   }
 
   addBlock(
-    "Type a request and press enter. The agent can run bash and read/write/edit files in " +
-      process.cwd(),
+    `Type a request and press enter. The agent can run bash and read/write/edit files in ${process.cwd()}`,
     COLORS.dim,
   );
+  addBlock(`/help for commands  ·  /new to start over  ·  /resume to pick an old session`, COLORS.dim);
+  setTitle();
 
-  return { root, transcript, input, inputBox, handlers, agent, addBlock, setStatus };
+  return {
+    root,
+    transcript,
+    input,
+    inputBox,
+    handlers,
+    agent,
+    store,
+    addBlock,
+    setStatus,
+    newSession,
+    resumeSession,
+    openPicker,
+  };
+}
+
+/** Compact relative time for the resume picker ("4m ago", "3d ago", "2026-01-02"). */
+function formatAge(iso) {
+  const then = Date.parse(iso ?? "");
+  if (Number.isNaN(then)) return "unknown";
+  const seconds = Math.max(0, (Date.now() - then) / 1000);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  if (seconds < 7 * 86400) return `${Math.floor(seconds / 86400)}d ago`;
+  return new Date(then).toISOString().slice(0, 10);
 }
 
 function formatToolCall(toolCall) {
