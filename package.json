@@ -4,9 +4,20 @@
   "description": "Minimal coding agent (bash/read/write/edit) built with Node.js + OpenTUI",
   "type": "module",
   "main": "src/index.js",
+  "bin": {
+    "ca": "bin/ca.mjs"
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "src"
+  ],
   "scripts": {
-    "start": "node --experimental-ffi --env-file=.env src/index.js",
-    "chat": "node --experimental-ffi --env-file=.env src/cli.js"
+    "start": "node scripts/run.mjs src/index.js",
+    "chat": "node scripts/run.mjs src/cli.js",
+    "inspect": "node scripts/run.mjs --network --log-api src/index.js",
+    "inspect:chat": "node scripts/run.mjs --network --log-api src/cli.js",
+    "viewer": "node scripts/serve-debug-ui.mjs"
   },
   "keywords": [],
   "author": "",
@@ -17,5 +28,8 @@
   },
   "dependencies": {
     "@opentui/core": "^0.5.11"
+  },
+  "devDependencies": {
+    "node-network-devtools": "^1.0.30"
   }
 }

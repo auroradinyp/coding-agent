@@ -1,0 +1,726 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>流式请求查看器</title>
+    <style>
+      :root {
+        --bg: #1a1b26;
+        --bg-alt: #1f2335;
+        --bg-in: #16161e;
+        --border: #3b4261;
+        --text: #c0caf5;
+        --dim: #565f89;
+        --accent: #7aa2f7;
+        --green: #9ece6a;
+        --orange: #e0af68;
+        --red: #f7768e;
+        --purple: #bb9af7;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font:
+          13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-alt);
+      }
+
+      header h1 {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--accent);
+        white-space: nowrap;
+      }
+
+      header .sub {
+        color: var(--dim);
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      header .spacer {
+        flex: 1;
+      }
+
+      button {
+        background: #24283b;
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 5px 10px;
+        font-size: 12px;
+        font-family: inherit;
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      button.primary {
+        background: #2b3350;
+        border-color: var(--accent);
+        color: #cdd6f4;
+      }
+
+      main {
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1px;
+        background: var(--border);
+      }
+
+      .pane {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg);
+      }
+
+      .pane-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 12px;
+        border-bottom: 1px solid var(--border);
+        color: var(--dim);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        background: var(--bg-alt);
+      }
+
+      .pane-head .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--accent);
+      }
+
+      .pane-head .dot.green {
+        background: var(--green);
+      }
+
+      .pane-head .count {
+        margin-left: auto;
+        text-transform: none;
+        letter-spacing: 0;
+      }
+
+      textarea {
+        flex: 1;
+        min-height: 0;
+        resize: none;
+        border: 0;
+        outline: 0;
+        padding: 12px;
+        background: var(--bg-in);
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.6;
+        tab-size: 2;
+        white-space: pre;
+        overflow: auto;
+      }
+
+      textarea::placeholder {
+        color: #3b4261;
+      }
+
+      .scroll {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        padding: 12px;
+      }
+
+      .empty {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        color: var(--dim);
+        text-align: center;
+      }
+
+      .empty code {
+        font-family: var(--mono);
+        color: var(--accent);
+      }
+
+      .status {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 12px;
+      }
+
+      .pill {
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 2px 9px;
+        font-size: 11px;
+        font-family: var(--mono);
+        color: var(--dim);
+      }
+
+      .pill.ok {
+        border-color: #3d5a3d;
+        color: var(--green);
+      }
+
+      .pill.warn {
+        border-color: #5a4a2b;
+        color: var(--orange);
+      }
+
+      .pill.err {
+        border-color: #5a2b33;
+        color: var(--red);
+      }
+
+      section.block {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        margin-bottom: 12px;
+        background: var(--bg-alt);
+      }
+
+      section.block > h2 {
+        margin: 0;
+        padding: 6px 11px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      section.block > h2 .badge {
+        margin-left: auto;
+        text-transform: none;
+        letter-spacing: 0;
+        font-family: var(--mono);
+        color: var(--orange);
+      }
+
+      section.block .body {
+        padding: 10px 11px;
+      }
+
+      pre {
+        margin: 0;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .content-text {
+        color: var(--text);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .reasoning-text {
+        color: var(--purple);
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
+      }
+
+      details.timeline > summary {
+        padding: 7px 11px;
+        cursor: pointer;
+        color: var(--dim);
+        font-size: 12px;
+        list-style: none;
+      }
+
+      details.timeline > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      details.timeline > summary::before {
+        content: "▸ ";
+        color: var(--accent);
+      }
+
+      details.timeline[open] > summary::before {
+        content: "▾ ";
+      }
+
+      .chunk {
+        border-top: 1px solid var(--border);
+        padding: 7px 11px;
+        font-family: var(--mono);
+        font-size: 11px;
+        display: flex;
+        gap: 10px;
+      }
+
+      .chunk .idx {
+        color: var(--dim);
+        min-width: 34px;
+        text-align: right;
+      }
+
+      .chunk .delta {
+        flex: 1;
+        min-width: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .tool {
+        border-top: 1px solid var(--border);
+        padding: 10px 11px;
+      }
+
+      .tool:first-child {
+        border-top: 0;
+      }
+
+      .tool .name {
+        font-family: var(--mono);
+        color: var(--orange);
+        font-weight: 600;
+        margin-bottom: 6px;
+      }
+
+      .tool .name .id {
+        color: var(--dim);
+        font-weight: 400;
+        margin-left: 8px;
+      }
+
+      .empty-note {
+        color: var(--dim);
+        font-style: italic;
+      }
+
+      .parse-error {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--red);
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+
+      @media (max-width: 900px) {
+        main {
+          grid-template-columns: 1fr;
+          grid-template-rows: 1fr 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>流式请求查看器</h1>
+      <span class="sub">粘贴原始 SSE（<code>data: {...}</code>）/ 原始响应 JSON → 右侧展示合并后的非流式结果</span>
+      <span class="spacer"></span>
+      <button id="sample">示例</button>
+      <button id="clear">清空</button>
+      <button id="copy" class="primary">复制合并结果</button>
+    </header>
+
+    <main>
+      <section class="pane">
+        <div class="pane-head">
+          <span class="dot"></span>
+          原始内容
+          <span class="count" id="input-stats"></span>
+        </div>
+        <textarea
+          id="raw"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="在这里粘贴流式响应，例如：&#10;&#10;data: {&quot;id&quot;:&quot;...&quot;,&quot;choices&quot;:[{&quot;delta&quot;:{&quot;content&quot;:&quot;你&quot;}}]}&#10;&#10;data: {&quot;choices&quot;:[{&quot;delta&quot;:{&quot;content&quot;:&quot;好&quot;}}]}&#10;&#10;data: [DONE]&#10;&#10;也支持整个非流式响应 JSON，或 data: 行内夹杂 event: / id: / 空行。"
+        ></textarea>
+      </section>
+
+      <section class="pane">
+        <div class="pane-head">
+          <span class="dot green"></span>
+          合并后的非流式结果
+          <span class="count" id="output-stats"></span>
+        </div>
+        <div class="scroll" id="result"></div>
+      </section>
+    </main>
+
+    <script>
+      // ── merge logic ────────────────────────────────────────────────────────
+      // Mirrors src/llm.js: tool_calls are accumulated by `index`, and id/name/
+      // arguments arrive as incremental fragments.
+
+      function tryJson(text) {
+        try {
+          return { ok: true, value: JSON.parse(text) };
+        } catch {
+          return { ok: false };
+        }
+      }
+
+      /** Pulls individual chunk objects out of whatever was pasted. */
+      function extractChunks(raw) {
+        const text = raw.trim();
+        if (!text) return { chunks: [], bad: [] };
+
+        // Whole input parses as one JSON value → non-streaming response, a bare
+        // message, or an array of chunks.
+        const whole = tryJson(text);
+        if (whole.ok) {
+          return { chunks: Array.isArray(whole.value) ? whole.value : [whole.value], bad: [] };
+        }
+
+        const chunks = [];
+        const bad = [];
+        for (const rawLine of text.split(/\r?\n/)) {
+          let line = rawLine.trim();
+          if (!line) continue;
+          if (line.startsWith("data:")) line = line.slice(5).trim();
+          else if (/^(event|id|retry|:)/.test(line)) continue;
+          if (line === "[DONE]") break;
+          if (!line.startsWith("{") && !line.startsWith("[")) continue;
+
+          const parsed = tryJson(line);
+          if (parsed.ok) chunks.push(parsed.value);
+          else bad.push(rawLine.trim());
+        }
+        return { chunks, bad };
+      }
+
+      function mergeChunks(chunks) {
+        const message = { role: "assistant", content: "", reasoning_content: "", tool_calls: [] };
+        const meta = { id: undefined, model: undefined, created: undefined, usage: undefined, finishReason: null };
+        const deltas = [];
+        let apiError = null;
+        let requestMessages = null;
+
+        for (const chunk of chunks) {
+          if (!chunk || typeof chunk !== "object") continue;
+
+          if (chunk.id && !meta.id) meta.id = chunk.id;
+          if (chunk.model && !meta.model) meta.model = chunk.model;
+          if (chunk.created && !meta.created) meta.created = chunk.created;
+          if (chunk.usage) meta.usage = chunk.usage;
+          if (Array.isArray(chunk.messages)) requestMessages = chunk.messages;
+          if (chunk.error) apiError = chunk.error.message ?? JSON.stringify(chunk.error);
+
+          const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : null;
+          if (!choice) continue;
+
+          if (choice.finish_reason) meta.finishReason = choice.finish_reason;
+
+          // streaming chunks use `delta`, non-streaming responses use `message`
+          const delta = choice.delta ?? choice.message;
+          if (!delta) continue;
+
+          const bits = [];
+          if (delta.content) {
+            message.content += delta.content;
+            bits.push("content " + JSON.stringify(delta.content));
+          }
+          if (delta.reasoning_content) {
+            message.reasoning_content += delta.reasoning_content;
+            bits.push("reasoning " + JSON.stringify(delta.reasoning_content));
+          }
+
+          for (const call of delta.tool_calls ?? []) {
+            const index = call.index ?? 0;
+            message.tool_calls[index] ??= { id: "", type: "function", function: { name: "", arguments: "" } };
+            const slot = message.tool_calls[index];
+            if (call.id) slot.id = call.id;
+            if (call.function?.name) slot.function.name += call.function.name;
+            if (call.function?.arguments) slot.function.arguments += call.function.arguments;
+            bits.push(
+              "tool_calls[" + index + "] " +
+                (call.function?.name ?? "") +
+                (call.function?.arguments ? " " + JSON.stringify(call.function.arguments) : ""),
+            );
+          }
+
+          if (bits.length) deltas.push({ index: deltas.length, text: bits.join("\n") });
+          else deltas.push({ index: deltas.length, text: "(空 delta)" });
+        }
+
+        message.tool_calls = message.tool_calls.filter(Boolean);
+        return { message, meta, deltas, apiError, requestMessages };
+      }
+
+      function parseArguments(raw) {
+        if (!raw) return { ok: true, value: {} };
+        const parsed = tryJson(raw);
+        return parsed.ok ? { ok: true, value: parsed.value } : { ok: false, value: raw };
+      }
+
+      // ── rendering ──────────────────────────────────────────────────────────
+
+      const els = {
+        raw: document.getElementById("raw"),
+        result: document.getElementById("result"),
+        inputStats: document.getElementById("input-stats"),
+        outputStats: document.getElementById("output-stats"),
+      };
+
+      const el = (tag, className, text) => {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+      };
+
+      function block(title, badge, buildBody) {
+        const box = el("section", "block");
+        const head = el("h2");
+        head.append(title);
+        if (badge) head.append(el("span", "badge", badge));
+        box.append(head);
+        const body = el("div", "body");
+        buildBody(body);
+        box.append(body);
+        return box;
+      }
+
+      function render(raw) {
+        const { chunks, bad } = extractChunks(raw);
+        const { message, meta, deltas, apiError, requestMessages } = mergeChunks(chunks);
+        const root = document.createDocumentFragment();
+
+        els.inputStats.textContent = raw.trim()
+          ? chunks.length + " 个 chunk · " + raw.length + " 字符"
+          : "";
+        els.outputStats.textContent = chunks.length ? chunks.length + " chunks" : "";
+        els.result.replaceChildren();
+
+        if (!chunks.length && !bad.length) {
+          const empty = el("div", "empty");
+          empty.append(el("div", null, "左侧粘贴内容后，这里实时显示合并结果"));
+          empty.append(el("div", null, "点右上角「示例」看一个带 reasoning + tool_call 的流"));
+          els.result.append(empty);
+          return;
+        }
+
+        if (requestMessages) {
+          root.append(
+            block("看起来是请求体", "messages × " + requestMessages.length, (body) => {
+              body.append(el("div", "empty-note", "你粘的是 chat/completions 的请求 payload，不是流式响应："));
+              body.append(el("pre", null, JSON.stringify(requestMessages, null, 2)));
+            }),
+          );
+          els.result.append(root);
+          return;
+        }
+
+        // status pills
+        const status = el("div", "status");
+        status.append(el("span", "pill ok", "✓ " + chunks.length + " chunks"));
+        if (meta.model) status.append(el("span", "pill", meta.model));
+        if (meta.finishReason) status.append(el("span", "pill", "finish_reason: " + meta.finishReason));
+        if (meta.usage?.total_tokens !== undefined)
+          status.append(el("span", "pill", "tokens: " + meta.usage.total_tokens));
+        if (bad.length) status.append(el("span", "pill warn", bad.length + " 行无法解析"));
+        if (apiError) status.append(el("span", "pill err", "API error"));
+        root.append(status);
+
+        if (apiError) {
+          root.append(block("接口报错", null, (body) => body.append(el("pre", null, String(apiError)))));
+        }
+
+        if (message.content) {
+          root.append(
+            block("正文 content", message.content.length + " 字", (body) =>
+              body.append(el("div", "content-text", message.content)),
+            ),
+          );
+        }
+
+        if (message.reasoning_content) {
+          root.append(
+            block("思考 reasoning_content", message.reasoning_content.length + " 字", (body) =>
+              body.append(el("div", "reasoning-text", message.reasoning_content)),
+            ),
+          );
+        }
+
+        if (message.tool_calls.length) {
+          const box = el("section", "block");
+          const head = el("h2");
+          head.append("工具调用 tool_calls");
+          head.append(el("span", "badge", "× " + message.tool_calls.length));
+          box.append(head);
+          for (const call of message.tool_calls) {
+            const item = el("div", "tool");
+            const name = el("div", "name");
+            name.append(call.function?.name || "(未命名)");
+            name.append(el("span", "id", call.id || ""));
+            item.append(name);
+            const args = parseArguments(call.function?.arguments);
+            if (args.ok) {
+              item.append(el("pre", null, JSON.stringify(args.value, null, 2)));
+            } else {
+              item.append(el("div", "empty-note", "arguments 不是合法 JSON，原样展示："));
+              item.append(el("pre", null, args.value));
+            }
+            box.append(item);
+          }
+          root.append(box);
+        }
+
+        if (!message.content && !message.reasoning_content && !message.tool_calls.length && !apiError) {
+          root.append(
+            block("没有可合并的内容", null, (body) =>
+              body.append(el("div", "empty-note", "chunk 里没有 delta.content / reasoning_content / tool_calls。")),
+            ),
+          );
+        }
+
+        root.append(
+          block("合并后的 message（JSON）", null, (body) =>
+            body.append(el("pre", null, JSON.stringify(message, null, 2))),
+          ),
+        );
+
+        if (meta.id || meta.model || meta.usage) {
+          const info = { id: meta.id, model: meta.model, created: meta.created, usage: meta.usage };
+          root.append(
+            block("元信息", null, (body) =>
+              body.append(el("pre", null, JSON.stringify(info, null, 2))),
+            ),
+          );
+        }
+
+        if (deltas.length) {
+          const details = el("details", "timeline");
+          details.append(el("summary", null, "原始分片时间线（" + deltas.length + "）"));
+          for (const d of deltas) {
+            const row = el("div", "chunk");
+            row.append(el("span", "idx", "#" + d.index));
+            row.append(el("span", "delta", d.text));
+            details.append(row);
+          }
+          root.append(details);
+        }
+
+        if (bad.length) {
+          root.append(
+            block("无法解析的行", bad.length + " 行", (body) => {
+              const list = el("ul", "parse-error");
+              for (const line of bad) list.append(el("li", null, line));
+              body.append(list);
+            }),
+          );
+        }
+
+        els.result.append(root);
+      }
+
+      // ── wiring ─────────────────────────────────────────────────────────────
+
+      let timer = 0;
+      function schedule() {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          render(els.raw.value);
+          try {
+            localStorage.setItem("stream-viewer:raw", els.raw.value);
+          } catch {}
+        }, 120);
+      }
+
+      els.raw.addEventListener("input", schedule);
+
+      document.getElementById("clear").addEventListener("click", () => {
+        els.raw.value = "";
+        schedule();
+        els.raw.focus();
+      });
+
+      document.getElementById("sample").addEventListener("click", () => {
+        els.raw.value = SAMPLE;
+        schedule();
+      });
+
+      document.getElementById("copy").addEventListener("click", async (event) => {
+        const { chunks } = extractChunks(els.raw.value);
+        const { message } = mergeChunks(chunks);
+        const text = JSON.stringify(message, null, 2);
+        const button = event.currentTarget;
+        try {
+          await navigator.clipboard.writeText(text);
+          button.textContent = "已复制 ✓";
+        } catch {
+          button.textContent = "复制失败";
+        }
+        setTimeout(() => (button.textContent = "复制合并结果"), 1200);
+      });
+
+      const SAMPLE = [
+        'data: {"id":"chatcmpl-8f3","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-flash","choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning_content":"用户想让我"},"finish_reason":null}]}',
+        "",
+        'data: {"id":"chatcmpl-8f3","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-flash","choices":[{"index":0,"delta":{"reasoning_content":"看看当前目录。"},"finish_reason":null}]}',
+        "",
+        'data: {"id":"chatcmpl-8f3","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-flash","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"bash","arguments":""}}]},"finish_reason":null}]}',
+        "",
+        'data: {"id":"chatcmpl-8f3","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-flash","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"command\\":"}}]},"finish_reason":null}]}',
+        "",
+        'data: {"id":"chatcmpl-8f3","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-flash","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"ls -la\\"}"}}]},"finish_reason":null}]}',
+        "",
+        'data: {"id":"chatcmpl-8f3","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-flash","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":42,"completion_tokens":17,"total_tokens":59}}',
+        "",
+        "data: [DONE]",
+      ].join("\n");
+
+      try {
+        els.raw.value = localStorage.getItem("stream-viewer:raw") ?? "";
+      } catch {}
+      render(els.raw.value);
+    </script>
+  </body>
+</html>

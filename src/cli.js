@@ -5,10 +5,14 @@
 import readline from "node:readline/promises";
 import process from "node:process";
 import { assertConfig, config } from "./config.js";
+import { registerNetworkDevtools } from "./devtools.js";
 import { createAgent, SYSTEM_PROMPT } from "./agent.js";
 import { HISTORY_DIR, createSessionStore, findSession } from "./session.js";
 
 assertConfig();
+
+// Must run before the first request so fetch/http are patched in time.
+await registerNetworkDevtools();
 
 const store = createSessionStore({
   dir: HISTORY_DIR,

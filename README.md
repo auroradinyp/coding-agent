@@ -12,12 +12,22 @@ src/
   session.js      会话持久化（~/.coding-agent/historys）
   llm.js          SSE 流式 chat completions 客户端
   config.js       环境变量
+  devtools.js     可选的 Chrome DevTools 网络调试（NETWORK_DEBUG=1）
+  api-log.js      API 请求/响应控制台日志（pnpm inspect）
   tools/
     bash.js       command, timeout
     read.js       path, startLine, endLine
     write.js      path, content
     edit.js       path, oldText, newText
     index.js      工具注册表 + OpenAI tool schema
+
+debug-ui/
+  index.html      流式请求查看器（单文件，pnpm viewer）
+scripts/
+  run.mjs         启动器：补 --experimental-ffi / .env / 选 Node 版本
+  serve-debug-ui.mjs  debug-ui 的零依赖静态服务器
+bin/
+  ca.mjs          全局命令 `ca`（pnpm link --global），转发给 scripts/run.mjs
 ```
 
 ## 环境要求
@@ -45,10 +55,83 @@ DEEPSEEK_MODEL=deepseek-flash
 ```bash
 pnpm start                     # TUI
 pnpm chat                      # 无界面 REPL，方便看 loop 的每一步
-node --experimental-ffi --env-file=.env src/index.js   # 等价于 pnpm start
+
+pnpm inspect                   # TUI：开 Chrome DevTools + 请求/响应打到 console
+pnpm inspect:chat              # REPL：同上，日志直接打终端
 ```
 
+`pnpm start` / `pnpm chat` 实际上都走 `scripts/run.mjs`：它负责补上 `--experimental-ffi`、
+加载 `.env`，并在当前 `node` 太旧（< 26.4）时自动改用在 nvm 里装的合适版本，
+否则给出明确报错而不是 `bad option: --experimental-ffi`。
+
+### 全局命令 `ca`
+
+```bash
+pnpm link --global            # 在仓库根目录执行一次
+ca                            # 等价于 pnpm start（TUI）
+ca --network --log-api        # 等价于 pnpm inspect
+ca --help / ca --version
+```
+
+`bin/ca.mjs` 只是 `scripts/run.mjs` 的薄封装：默认 entry 是 `src/index.js`，
+其余逻辑（Node 版本探测、`--experimental-ffi`、`--env-file`）完全复用。
+因为是 `link`，改完源码直接生效，不用重新安装；配置仍读仓库里的 `.env`。
+
 TUI 里输入请求回车即可，`ctrl+c` 退出（`/exit` 也可以）。
+
+## 调试网络请求
+
+`pnpm inspect` / `pnpm inspect:chat` 同时做两件事：
+
+1. **自动打开 Chrome DevTools 的 Network 面板**（`NETWORK_DEBUG=1` → `src/devtools.js` +
+   [node-network-devtools](https://github.com/GrinZero/node-network-devtools)）。地址形如
+   `devtools://devtools/bundled/inspector.html?ws=127.0.0.1:5271`，能看请求头（含
+   `Authorization`）、SSE 原始分片，Initiator 里点一下跳回 `src/llm.js`。
+2. **把请求/响应打到 console**（`LOG_API=1`）。`src/llm.js` 在**整段 SSE 流合并完**之后，
+   把这一轮的请求和响应一次性打印出来（不是每个 delta 一行）：
+
+```
+╭─ API · deepseek-flash · 23:59:22 ───────────────────────────────────────────
+│ POST https://api.deepseek.com/chat/completions
+│ stream=true · tool_choice=auto · tools=0 · messages=1
+│
+│ { "model": "deepseek-flash", "messages": [ … ] }               ← 完整请求体
+│
+│ response 200 · 966ms · stop
+│ { "role": "assistant", "content": "OK", "tool_calls": [ … ] }  ← 合并后的响应
+╰─────────────────────────────────────────────────────────────────────────────
+```
+
+- `pnpm inspect:chat`（无界面 REPL）直接打在终端上，最清楚。
+- `pnpm inspect`（TUI）用的是 opentui 自带的 **console 面板**（底部 30%），`src/ui.js`
+  启动时自动展开；`↑↓` 翻日志、`esc` 让出键盘焦点（面板保留，可以边看边输入），
+  `+/-` 调高度、`ctrl+s` 存盘。
+- 响应里的 `tool_calls[].function.arguments` 会被解析成对象，不再是转义字符串。
+- 单条 message 内容最长 2000 字：`LOG_API_LIMIT=0 pnpm inspect:chat` 可取消限制。
+- 只想开其中一个：`NETWORK_DEBUG=1 pnpm start`（只开 Chrome）或 `LOG_API=1 pnpm chat`（只打日志）。
+- 不想自动弹 Chrome、只想拿链接：再加 `NETWORK_DEBUG_MODE=true`。
+- 都只在当前进程内生效：`bash` 工具起的子进程（比如 `curl`）抓不到；端口冲突用
+  `NETWORK_SERVER_PORT=...` 覆盖。
+
+## 流式请求查看器
+
+`pnpm viewer` 起一个零依赖静态服务器（默认 http://localhost:5173，被占用就顺延），
+打开 `debug-ui/index.html`。**左边粘贴原始内容，右边实时展示合并后的非流式结果。**
+
+左边接受：
+
+- `data: {...}` 的 SSE（DeepSeek / OpenAI 格式），`event:` / `id:` / 空行 / `[DONE]` 会忽略；
+- 整段非流式响应 JSON，或一个 chunk 数组；
+- chat/completions 的请求体（带 `messages`）——会识别出来并直接展示 messages。
+
+右边会：
+
+- 把 `tool_calls` 按 `index` 合并（`id` / `name` / `arguments` 都是增量分片），
+  并把 `arguments` 解析成对象；
+- 分开显示 `content` / `reasoning_content`，以及 `finish_reason` / `usage` / `model` 等元信息；
+- 给出「原始分片时间线」和无法解析的行，方便对账。
+
+单文件、无外部请求，直接 `open debug-ui/index.html` 也能用（只是 file:// 下剪贴板会退化）。
 
 ## 会话管理
 
